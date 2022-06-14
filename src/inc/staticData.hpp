@@ -15,7 +15,7 @@ struct ThreadItem {
 };
 
 struct fileExists {
-	std::string name;
+	std::wstring name;
 	unsigned int index;
 };
 

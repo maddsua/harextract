@@ -34,3 +34,10 @@
 *.res
 *.win
 *.har
+*.ts
+*.webp
+*.txt
+src-cli/test_private.rc
+*.dat
+src-cli/main_gui.cpp
+src-cli/unhar_private.rc

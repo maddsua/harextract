@@ -2,6 +2,16 @@
 //	No warranties are given, etc...
 // This file is a component of the HAR Extractor
 
+
+//	this bs can be found in sdkddkver.h
+//	and yes, I use apis that require win vista and newer. goodby xp. rest in peace
+#define NTDDI_VERSION	NTDDI_VISTA
+#define _WIN32_WINNT	_WIN32_WINNT_VISTA
+
+#pragma comment(lib,"ole32.lib")
+#pragma comment(lib,"uuid.lib")
+
+
 #include <windows.h>
 #include <windowsx.h>
 #include <CommCtrl.h>
@@ -14,12 +24,32 @@
 #include <thread>
 #include <mutex>
 
+#include <string>
+#include <codecvt>
+#include <locale>
+
+using convert_t = std::codecvt_utf8<wchar_t>;
+std::wstring_convert<convert_t, wchar_t> strconverter;
+
+/*
+std::string to_string(std::wstring wstr)
+{
+    return strconverter.to_bytes(wstr);
+}
+
+std::wstring to_wstring(std::string str)
+{
+    return strconverter.from_bytes(str);
+}
+*/
+
 #include "inc/staticConfig.hpp"
 #include "inc/staticData.hpp"
 
+#include "inc/binbase64.hpp"
+
 #include "harextract_private.h"
 
-#include "inc/base64.hpp"
 
 
 LRESULT CALLBACK WndProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam);
@@ -28,16 +58,18 @@ HINSTANCE appInstance;
 std::string openFileAtStartup;
 std::mutex vectorlock;
 
+bool openFileDialogWin(wchar_t* openPath, bool openDir);
+void trimFilePathW(wchar_t* filename, const wchar_t* filepath);
 
-bool openfile(char* filepath, char* filename);
-void trimFilePath(char* filename, const char* filepath);
-bool openfolder(char* dirpath, char* dirname);
+//bool openfile(char* filepath, char* filename);
+//void trimFilePath(char* filename, const char* filepath);
+//bool openfolder(char* dirpath, char* dirname);
 
-bool loadfile(const char* path, std::vector <std::string>* jsonLines);
+bool loadFileW(const wchar_t* path, std::vector <std::string>* jsonLines);
 unsigned int s2pidJSON(std::vector <std::string>* jsonLines, std::vector <response>* mediaFiles);
 
-void makefile(struct response downFile, std::string dirName, bool* success);
-std::string renameIfConflicts(const std::string filename);
+void makefile(struct response downFile, std::wstring dirName, bool* success);
+std::wstring renameIfConflicts(const std::wstring filename);
 
 void updateAcceptList(unsigned int index, std::vector <std::string>* list);
 unsigned int removeUnaccepted(std::vector <response>* mediaFiles, std::vector <std::string> accept);
@@ -101,10 +133,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam){
 	static std::vector <std::string> accept;	
 	static std::vector <std::string> partmedia;
 	
-	static char inputFile[MAX_PATH];
-	static char inputFileName[stcTxtStrBuff];
-	static char outputFolder[MAX_PATH];
-	static char outputFolderName[stcTxtStrBuff];
+	static wchar_t inputFile[MAX_PATH] = {0};
+	static wchar_t inputFileName[stcTxtStrBuff] = {0};
+	static wchar_t outputFolder[MAX_PATH] = {0};
+	static wchar_t outputFolderName[stcTxtStrBuff] = {0};
 	
 	static HWND img_banner;
 	static HWND stc_srcfile;
@@ -132,10 +164,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam){
 				}
 			
 			//	selected file
-			stc_srcfile = CreateWindow("STATIC", "No file Selected", WS_VISIBLE | WS_CHILD | WS_BORDER | SS_LEFT | SS_NOTIFY, 28, 98, 186, 18, hwnd, (HMENU)GUIID_SRCFILE, NULL, NULL);
+			stc_srcfile = CreateWindowW(L"STATIC", L"No file Selected", WS_VISIBLE | WS_CHILD | WS_BORDER | SS_LEFT | SS_NOTIFY, 28, 98, 186, 18, hwnd, (HMENU)GUIID_SRCFILE, NULL, NULL);
 			
 			//	output folder
-			stc_destfold = CreateWindow("STATIC", "Not output directory", WS_VISIBLE | WS_CHILD | WS_BORDER | SS_LEFT | SS_NOTIFY, 28, 145, 186, 18, hwnd, (HMENU)GUIID_DESTDIR, NULL, NULL);
+			stc_destfold = CreateWindowW(L"STATIC", L"No output directory", WS_VISIBLE | WS_CHILD | WS_BORDER | SS_LEFT | SS_NOTIFY, 28, 145, 186, 18, hwnd, (HMENU)GUIID_DESTDIR, NULL, NULL);
 			
 			stc_proginfo = CreateWindow("STATIC", NULL, WS_VISIBLE | WS_CHILD | SS_LEFT | SS_SIMPLE, 28, 230, 186, 18, hwnd, (HMENU)GUIID_PROGINFO, NULL, NULL);
 			
@@ -193,13 +225,14 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam){
 			//	disable controls
 			EnableWindow(GetDlgItem(hwnd, GUIID_BTNRUN), false);
 			
-			//	openfile
-			if(openFileAtStartup.size() > 0){
-								
-				strncpy(inputFile, openFileAtStartup.c_str(), MAX_PATH - 1);
-				trimFilePath(inputFileName, inputFile);
+			//	openfile at startup
+			if(openFileAtStartup.size() > 0 && openFileAtStartup.size() < MAX_PATH){
 				
-				SetWindowText(stc_srcfile, inputFileName);
+				mbstowcs(inputFile, openFileAtStartup.c_str() + 1, openFileAtStartup.size() - 2);
+			//	strncpy(inputFile, openFileAtStartup.c_str(), MAX_PATH - 1);
+			
+				trimFilePathW(inputFileName, inputFile);
+				SetWindowTextW(stc_srcfile, inputFileName);
 			}
 			
 			break;
@@ -234,13 +267,15 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam){
 						
 						case GUIID_SELFILE:{
 							
-							if(openfile(inputFile, inputFileName)){
+							if(openFileDialogWin(inputFile, false)){
+								
 								//	display file name
-								SetWindowText(stc_srcfile, inputFileName);
+								trimFilePathW(inputFileName, inputFile);
+								SetWindowTextW(stc_srcfile, inputFileName);
 							}
-							
+														
 							//	enable start button
-							if(strlen(inputFile) > 0 && strlen(outputFolder) > 0){
+							if(wcslen(inputFile) > 0 && wcslen(outputFolder) > 0){
 								EnableWindow(GetDlgItem(hwnd, GUIID_BTNRUN), true);
 							}
 							
@@ -249,13 +284,15 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam){
 						
 						case GUIID_SELDIR:{
 							
-							if(openfolder(outputFolder, outputFolderName)){
+							if(openFileDialogWin(outputFolder, true)){
+								
 								//	display directory path
-								SetWindowText(stc_destfold, outputFolderName);
+								trimFilePathW(outputFolderName, outputFolder);
+								SetWindowTextW(stc_destfold, outputFolderName);
 							}
 							
 							//	enable start button
-							if(strlen(inputFile) > 0 && strlen(outputFolder) > 0){
+							if(wcslen(inputFile) > 0 && wcslen(outputFolder) > 0){
 								EnableWindow(GetDlgItem(hwnd, GUIID_BTNRUN), true);
 							}
 							
@@ -275,7 +312,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam){
 							SetWindowText(stc_proginfo, "Reading JSON contents...");
 							
 							//	load file contents
-							if(loadfile(inputFile, &harContents)){
+							if(loadFileW(inputFile, &harContents)){
 								
 								//	parse archive
 								unsigned int foundFiles = s2pidJSON(&harContents, &parsedFiles);
@@ -416,23 +453,23 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam){
 }
 
 
-void makefile(struct response downFile, std::string dirName, bool* success){
+void makefile(struct response downFile, std::wstring dirName, bool* success){
 
 //	get file name
-	std::string fileNameNoExt = downFile.address;
+	std::wstring fileNameNoExt = strconverter.from_bytes(downFile.address);
 	
 
 //	trim some trash at the beginning of filetype string
-	char trashToTrim[] = {'?','#','.', '\"', ','};
-	unsigned int trashList = sizeof(trashToTrim)/sizeof(char);
+	wchar_t trashToTrim[] = {L'?',L'#',L'.', L'\"',L','};
+	unsigned int trashList = sizeof(trashToTrim)/sizeof(wchar_t);
 	
-	int res_trim_begin = fileNameNoExt.find_last_of('/');
+	int res_trim_begin = fileNameNoExt.find_last_of(L'/');
 	
 		//	remove last slash if its last in string
-		if(fileNameNoExt[res_trim_begin + 1] == '\"'){
+		if(fileNameNoExt[res_trim_begin + 1] == L'\"'){
 		
 			fileNameNoExt.erase(res_trim_begin, fileNameNoExt.size() - 1);
-			res_trim_begin = fileNameNoExt.find_last_of('/');
+			res_trim_begin = fileNameNoExt.find_last_of(L'/');
 		}
 		//	remove just last slash
 		if(res_trim_begin != std::string::npos){
@@ -465,7 +502,7 @@ void makefile(struct response downFile, std::string dirName, bool* success){
 		fileNameNoExt.erase(fsMaxName, fileNameNoExt.size() - 1);
 	}
 	else if(fileNameNoExt.size() < 1){
-		fileNameNoExt = "responce";
+		fileNameNoExt = L"responce";
 	}
 	
 	
@@ -509,7 +546,7 @@ void makefile(struct response downFile, std::string dirName, bool* success){
 	
 
 //	check if a file with this name already excists
-	std::string filePath = dirName + "/" + fileNameNoExt + fileExt;
+	std::wstring filePath = dirName + L"/" + fileNameNoExt + strconverter.from_bytes(fileExt);
 	
 	while(true){
 		
@@ -519,7 +556,7 @@ void makefile(struct response downFile, std::string dirName, bool* success){
     	if(testIfExists.is_open()){
     		
     		testIfExists.close();
-    		filePath = dirName + "/" + renameIfConflicts(fileNameNoExt + fileExt);
+    		filePath = dirName + L"/" + renameIfConflicts(fileNameNoExt + strconverter.from_bytes(fileExt));
 		}
 		else{
 			break;
@@ -567,7 +604,7 @@ void makefile(struct response downFile, std::string dirName, bool* success){
 }
 
 
-std::string renameIfConflicts(const std::string filename){
+std::wstring renameIfConflicts(const std::wstring filename){
 	
 	static std::vector <fileExists> renList;
 	
@@ -604,21 +641,21 @@ std::string renameIfConflicts(const std::string filename){
 	}
 	
 	
-	std::string newFileName = filename;
+	std::wstring newFileName = filename;
 	
-	int ren_dotpos = newFileName.find('.');
+	int ren_dotpos = newFileName.find(L'.');
 	
 		if(ren_dotpos != std::string::npos){
 			
-			std::string tFileTempExt = newFileName;
+			std::wstring tFileTempExt = newFileName;
 				tFileTempExt.erase(0, ren_dotpos);
 				
 			newFileName.erase(ren_dotpos, newFileName.size() - 1);
-			newFileName += "_" + std::to_string(conficting.index) + tFileTempExt;
+			newFileName += L"_" + strconverter.from_bytes(std::to_string(conficting.index)) + tFileTempExt;
 			
 		}
 		else{
-			newFileName += "_" + std::to_string(conficting.index);
+			newFileName += L"_" + strconverter.from_bytes(std::to_string(conficting.index));
 		}
 		
 	return newFileName;
@@ -691,7 +728,7 @@ unsigned int s2pidJSON(std::vector <std::string>* jsonLines, std::vector <respon
 	return mediaFiles->size();
 }
 
-bool loadfile(const char* path, std::vector <std::string>* jsonLines){
+bool loadFileW(const wchar_t* path, std::vector <std::string>* jsonLines){
 	
 	std::ifstream openHAR;
     openHAR.open(path);
@@ -781,7 +818,7 @@ void updateAcceptList(unsigned int index, std::vector <std::string>* list){
 	return;					
 }
 
-
+/*
 bool openfolder(char* dirpath, char* dirname){
 	
 	char tempPath[MAX_PATH];
@@ -811,7 +848,8 @@ bool openfolder(char* dirpath, char* dirname){
 	
 	return false;	
 }
-
+*/
+/*
 bool openfile(char* filepath, char* filename){
 	
 	char file[MAX_PATH] = {0};
@@ -838,8 +876,8 @@ bool openfile(char* filepath, char* filename){
 
 	return false;
 }
-
-
+*/
+/*
 void trimFilePath(char* filename, const char* filepath){
 	
 	unsigned int pathLen = strlen(filepath);
@@ -853,6 +891,24 @@ void trimFilePath(char* filename, const char* filepath){
 	}
 	else{
 		strcpy(filename, filepath);
+	}
+	
+	return;
+}
+*/
+void trimFilePathW(wchar_t* filename, const wchar_t* filepath){
+	
+	unsigned int pathLen = wcslen(filepath);
+	
+	if(pathLen >= stcTxtStrBuff){
+		
+		wcscpy(filename, L" ...");
+		
+		unsigned int pathPosShift = pathLen - (stcTxtStrBuff - wcslen(filename)) + 1;			
+		wcscat(filename, filepath + pathPosShift);
+	}
+	else{
+		wcscat(filename, filepath);
 	}
 	
 	return;
@@ -892,4 +948,72 @@ unsigned int removeUnaccepted(std::vector <response>* mediaFiles, std::vector <s
 	}
 	
 	return mediaFiles->size();
+}
+
+bool openFileDialogWin(wchar_t* openPath, bool openDir){
+	
+	wchar_t pathCandidate[MAX_PATH];
+	
+//	this part is copiend from internet and let's assume that it just works
+	
+	HRESULT opDialRslt = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+    
+	if(SUCCEEDED(opDialRslt)){
+    	
+		IFileOpenDialog* pFileOpen;
+        
+		// Create the FileOpenDialog object.
+		opDialRslt = CoCreateInstance(CLSID_FileOpenDialog, NULL, CLSCTX_ALL, IID_IFileOpenDialog, reinterpret_cast<void**>(&pFileOpen));
+
+		if(SUCCEEDED(opDialRslt)){
+			
+			// do we look for dir?
+			DWORD dwOptions;
+			if(SUCCEEDED(pFileOpen->GetOptions(&dwOptions)) && openDir){
+				
+				pFileOpen->SetOptions(dwOptions | FOS_PICKFOLDERS);
+			}
+			else{
+				
+				const int fileFilters = 3;
+				COMDLG_FILTERSPEC fFilter[fileFilters] = {{L"HAR file", L"*.har"},{L"JSON file", L"*.json"}, {L"All Files",L"*.*"}};
+				pFileOpen->SetFileTypes(fileFilters, fFilter);
+			}
+			
+			// Show the Open dialog box.
+			opDialRslt = pFileOpen->Show(NULL);
+
+            // Get the file name from the dialog box.
+			if(SUCCEEDED(opDialRslt)){
+            	
+				IShellItem* pItem;
+				opDialRslt = pFileOpen->GetResult(&pItem);
+                
+				if(SUCCEEDED(opDialRslt)){
+                	
+					wchar_t* pTemp;
+
+					opDialRslt = pItem->GetDisplayName(SIGDN_FILESYSPATH, &pTemp);
+
+					wcscpy_s(pathCandidate, MAX_PATH, pTemp);
+
+					if(SUCCEEDED(opDialRslt))
+						CoTaskMemFree(pTemp);
+					
+					pItem->Release();
+                }
+            }
+            pFileOpen->Release();
+        }
+        CoUninitialize();
+    }
+    
+//	my dumb part
+    if(wcslen(pathCandidate) > 3 && (wcschr(pathCandidate, L'\\') != NULL || wcschr(pathCandidate, L'/') != NULL)){
+    	
+    	wcscpy_s(openPath, MAX_PATH, pathCandidate);
+    	return true;
+	}
+
+    return false;
 }

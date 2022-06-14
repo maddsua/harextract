@@ -1,0 +1,21 @@
+Change log
+v3.2
+
+- Focused on command line tool
+- Unicode removed
+- 64-bit support (now can work with very big files)
+- New base64 decoder (very fast, ~ 12x faster tha that crappy piece of code from the internet)
+- Text-restoration function (restores special character that was changed by json)
+- Much more efficient memory usage
+- 'Lost files' bug fixed
+- And that is a complitely new app
+
+...
+
+v1.1
+
+- Unicode support added
+
+v1.0
+
+- Base version
